@@ -3,9 +3,10 @@ import asyncio
 import random
 import re
 import os
+import time
 
 # Настройка страницы
-st.set_page_config(page_title="TG Promo Final", layout="wide")
+st.set_page_config(page_title="TG Promo Ultimate", layout="wide")
 
 def parse_spintax(text):
     """Случайный выбор слов из формата {вариант1|вариант2}."""
@@ -44,7 +45,7 @@ async def run_promotion_logic(app, group_links, message_template, delay_range):
             update_logs(f"[OK] Отправлено в {target}")
 
             wait = random.randint(delay_range[0], delay_range[1])
-            update_logs(f"[WAIT] Пауза {wait} сек...")
+            update_logs(f"[WAIT] Ожидание {wait} сек...")
             await asyncio.sleep(wait)
 
         except Exception as e:
@@ -58,7 +59,7 @@ async def run_promotion_logic(app, group_links, message_template, delay_range):
     update_logs("[DONE] Рассылка завершена.")
 
 def main():
-    st.title("🚀 Telegram Promo (Stable Auth)")
+    st.title("🚀 Telegram Promo (Anti-Session-Bug)")
 
     # Sidebar
     st.sidebar.header("🔑 Настройки")
@@ -70,13 +71,15 @@ def main():
     auth_code = st.sidebar.text_input("Код из Telegram", placeholder="12345")
     password_2fa = st.sidebar.text_input("2FA Пароль", type="password")
 
-    session_name = f"session_{phone}"
+    # Генерируем уникальное имя сессии для текущей попытки
+    if 'session_suffix' not in st.session_state:
+        st.session_state['session_suffix'] = int(time.time())
+    
+    current_session_name = f"session_{phone}_{st.session_state['session_suffix']}"
 
-    if st.sidebar.button("🗑️ Полный сброс сессии"):
-        for ext in [".session", ".session-journal"]:
-            if os.path.exists(session_name + ext):
-                os.remove(session_name + ext)
-        st.sidebar.success("Очищено! Начни с Шага 1.")
+    if st.sidebar.button("🗑️ Полный сброс (Новая сессия)"):
+        st.session_state['session_suffix'] = int(time.time())
+        st.rerun()
 
     # Интерфейс
     col1, col2 = st.columns(2)
@@ -94,16 +97,16 @@ def main():
     # ШАГ 1: ПОЛУЧЕНИЕ КОДА
     if st.button("📩 1. ПОЛУЧИТЬ КОД", use_container_width=True):
         if not api_id or not api_hash or not phone:
-            st.error("Заполни все настройки в Sidebar!")
+            st.error("Заполни API ID, Hash и Телефон!")
         else:
             async def get_code():
-                # Используем in_memory, чтобы не плодить битые файлы при авторизации
+                # Работаем только в памяти для запроса кода
                 app = Client(":memory:", api_id=int(api_id), api_hash=api_hash, phone_number=phone)
-                await app.connect()
                 try:
+                    await app.connect()
                     code_info = await app.send_code(phone)
                     st.session_state['code_hash'] = code_info.phone_code_hash
-                    st.success("Код отправлен! Введи его в поле слева.")
+                    st.success(f"Код отправлен! (Сессия: {current_session_name})")
                 except Exception as e:
                     st.error(f"Ошибка: {e}")
                 finally:
@@ -117,21 +120,29 @@ def main():
             st.error("Введи код подтверждения!")
         else:
             async def start_app():
-                # Пытаемся запустить постоянную сессию
-                app = Client(session_name, api_id=int(api_id), api_hash=api_hash, phone_number=phone)
-                await app.connect()
+                # Создаем абсолютно новый файл сессии
+                app = Client(current_session_name, api_id=int(api_id), api_hash=api_hash, phone_number=phone)
                 try:
-                    me = await app.get_me()
+                    await app.connect()
+                    
+                    # Проверяем, авторизованы ли мы
+                    me = None
+                    try:
+                        me = await app.get_me()
+                    except:
+                        pass
+
                     if not me:
                         h = st.session_state.get('code_hash')
                         if not h:
-                            st.error("Хэш не найден. Нажми 'Получить код' еще раз.")
+                            st.error("Хэш не найден. Нажми '1. Получить код' еще раз.")
                             return
                         
                         try:
+                            # Входим
                             await app.sign_in(phone, h, auth_code)
                         except Exception as e:
-                            # Обработка 2FA (Cloud Password)
+                            # Если нужно 2FA
                             if "SessionPasswordNeeded" in str(type(e)) or "password" in str(e).lower():
                                 if password_2fa:
                                     await app.check_password(password_2fa)
@@ -145,11 +156,10 @@ def main():
                     await run_promotion_logic(app, group_list, msg_template, delays)
                     
                 except Exception as e:
-                    st.error(f"Ошибка: {e}")
-                    # Если ключ битый — удаляем файл
+                    st.error(f"Ошибка авторизации: {e}")
+                    # Если ошибка сессии, предлагаем сбросить суффикс
                     if "AUTH_KEY_UNREGISTERED" in str(e):
-                        if os.path.exists(f"{session_name}.session"):
-                            os.remove(f"{session_name}.session")
+                        st.info("Попробуйте нажать кнопку 'Полный сброс' слева и начать заново.")
                 finally:
                     if app.is_connected:
                         await app.disconnect()
