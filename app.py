@@ -4,7 +4,8 @@ import random
 import re
 import os
 
-st.set_page_config(page_title="TG Promo Expert", layout="wide")
+# Настройка страницы
+st.set_page_config(page_title="TG Promo Ultimate Fix", layout="wide")
 
 def parse_spintax(text):
     def replace(match):
@@ -21,7 +22,7 @@ async def run_promotion(client, group_links, message_template, delay_range):
         logs.append(msg)
         log_area.code("\n".join(logs[-15:]))
 
-    update_logs("[INFO] Начинаю рассылку...")
+    update_logs("[INFO] Начинаю процесс...")
     for link in group_links:
         link = link.strip()
         if not link: continue
@@ -29,7 +30,7 @@ async def run_promotion(client, group_links, message_template, delay_range):
             target = link.replace("https://t.me/", "").replace("@", "").split("/")[0]
             try:
                 await client.join_chat(target)
-                update_logs(f"[+] Чат: {target}")
+                update_logs(f"[+] Группа: {target}")
             except: pass
             
             msg = parse_spintax(message_template)
@@ -41,76 +42,87 @@ async def run_promotion(client, group_links, message_template, delay_range):
             await asyncio.sleep(wait)
         except Exception as e:
             update_logs(f"[ERROR] {link}: {str(e)}")
-    update_logs("[DONE] Завершено.")
+    update_logs("[DONE] Рассылка завершена.")
 
 def main():
-    st.title("🚀 Telegram Promo (String Mode)")
+    st.title("🚀 Telegram Promo (Stable Auth Fix)")
 
+    # Sidebar
     st.sidebar.header("🔑 Настройки")
     api_id = st.sidebar.text_input("API ID", value=str(st.secrets.get("api_id", "")))
     api_hash = st.sidebar.text_input("API Hash", value=st.secrets.get("api_hash", ""), type="password")
     phone = st.sidebar.text_input("Телефон", value=st.secrets.get("phone_number", ""))
     
     st.sidebar.divider()
-    s_session_input = st.sidebar.text_area("String Session (вставь сюда)")
-    auth_code = st.sidebar.text_input("Код подтверждения")
-    password_2fa = st.sidebar.text_input("2FA Пароль", type="password")
-
+    s_session_input = st.sidebar.text_area("Вставьте полученную String Session", height=100)
+    
+    # Основной интерфейс
     col1, col2 = st.columns(2)
     with col1:
-        st.subheader("📋 Чаты")
+        st.subheader("📋 Список чатов")
         groups = st.text_area("Ссылки", height=200)
         group_list = [g.strip() for g in groups.split("\n") if g.strip()]
     with col2:
         st.subheader("📝 Реклама")
-        msg = st.text_area("Текст", height=100)
-        delays = st.slider("Задержка", 10, 600, (30, 60))
+        msg = st.text_area("Текст {A|B}", height=100)
+        delays = st.slider("Задержка (сек)", 10, 600, (30, 60))
 
     from pyrogram import Client
+    from pyrogram.errors import SessionPasswordNeeded, PhoneCodeExpired, PhoneCodeInvalid
 
-    # КНОПКА 1
-    if st.button("📩 1. ПОЛУЧИТЬ STRING SESSION"):
-        async def get_s():
-            # Всегда создаем новый клиент в памяти
-            app = Client(":memory:", api_id=int(api_id), api_hash=api_hash, phone_number=phone)
-            await app.connect()
-            try:
-                if not auth_code:
-                    code_info = await app.send_code(phone)
-                    st.session_state['c_hash'] = code_info.phone_code_hash
-                    st.info("Код отправлен! Введи его и жми кнопку снова.")
-                else:
-                    try:
-                        await app.sign_in(phone, st.session_state.get('c_hash'), auth_code)
-                    except Exception as e:
-                        if "SessionPasswordNeeded" in str(e) or "password" in str(e).lower():
-                            if password_2fa:
-                                await app.check_password(password_2fa)
-                            else:
-                                st.error("Введите 2FA пароль!")
-                                return
-                        else: raise e
-                    
-                    # Если дошли сюда — мы внутри
-                    final_string = await app.export_session_string()
-                    st.success("ГОТОВО! Копируй это:")
-                    st.code(final_string)
-            except Exception as e:
-                st.error(f"Ошибка: {e}")
-            finally:
-                await app.disconnect()
-        
-        asyncio.run(get_s())
-
-    # КНОПКА 2
-    if st.button("🚀 2. ЗАПУСТИТЬ РАССЫЛКУ", type="primary"):
-        if not s_session_input:
-            st.error("Нет String Session!")
+    # --- ЕДИНЫЙ ПРОЦЕСС АВТОРИЗАЦИИ ---
+    if st.button("📩 ПОЛУЧИТЬ STRING SESSION"):
+        if not api_id or not api_hash or not phone:
+            st.error("Заполните данные в Sidebar!")
         else:
-            async def run_m():
-                # Убираем все пробелы из строки перед использованием
-                clean_session = s_session_input.strip().replace("\n", "").replace(" ", "")
-                app = Client("promo_bot", session_string=clean_session, api_id=int(api_id), api_hash=api_hash)
+            async def get_session_flow():
+                # Создаем клиент в памяти
+                app = Client(":memory:", api_id=int(api_id), api_hash=api_hash, phone_number=phone)
+                await app.connect()
+                
+                try:
+                    # Шаг 1: Отправка кода
+                    code_info = await app.send_code(phone)
+                    
+                    # Создаем форму для ввода кода ПРЯМО ВНУТРИ асинхронного цикла
+                    placeholder = st.empty()
+                    with placeholder.container():
+                        st.warning("Код отправлен! Введите его ниже.")
+                        input_code = st.text_input("Код из Telegram", key="final_code")
+                        input_2fa = st.text_input("2FA Пароль (если есть)", type="password", key="final_2fa")
+                        confirm_btn = st.button("ПОДТВЕРДИТЬ И ПОЛУЧИТЬ СТРОКУ")
+
+                        if confirm_btn and input_code:
+                            try:
+                                await app.sign_in(phone, code_info.phone_code_hash, input_code)
+                            except SessionPasswordNeeded:
+                                if input_2fa:
+                                    await app.check_password(input_2fa)
+                                else:
+                                    st.error("Нужен 2FA пароль!")
+                                    return
+                            
+                            s_string = await app.export_session_string()
+                            st.success("ВАША СЕССИЯ:")
+                            st.code(s_string)
+                            placeholder.empty() # Убираем форму
+                
+                except Exception as e:
+                    st.error(f"Ошибка: {e}")
+                finally:
+                    await app.disconnect()
+
+            # Запуск
+            asyncio.run(get_session_flow())
+
+    # --- ШАГ 2: ЗАПУСК РАССЫЛКИ ---
+    if st.button("🚀 ЗАПУСТИТЬ РАССЫЛКУ", type="primary"):
+        if not s_session_input:
+            st.error("Вставьте String Session!")
+        else:
+            async def run_main():
+                clean_s = s_session_input.strip().replace(" ", "")
+                app = Client("promo_bot", session_string=clean_s, api_id=int(api_id), api_hash=api_hash)
                 await app.connect()
                 try:
                     await run_promotion(app, group_list, msg, delays)
@@ -119,7 +131,7 @@ def main():
                 finally:
                     await app.disconnect()
             
-            asyncio.run(run_m())
+            asyncio.run(run_main())
 
 if __name__ == "__main__":
     main()
