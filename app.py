@@ -58,7 +58,7 @@ async def run_promotion_logic(app, group_links, message_template, delay_range):
     update_logs("[DONE] Рассылка завершена.")
 
 def main():
-    st.title("🚀 Telegram Promo (Session Fix)")
+    st.title("🚀 Telegram Promo (Final Fix)")
 
     # Sidebar
     st.sidebar.header("🔑 Настройки аккаунта")
@@ -68,22 +68,22 @@ def main():
     
     st.sidebar.divider()
     auth_code = st.sidebar.text_input("Код из Telegram", placeholder="12345")
-    password_2fa = st.sidebar.text_input("2FA Пароль (если есть)", type="password")
+    password_2fa = st.sidebar.text_input("2FA Пароль", type="password")
 
-    # Кнопка для полной очистки сессии, если всё сломалось
-    if st.sidebar.button("🗑️ Сбросить сессию (очистка)"):
-        session_file = f"session_{phone}.session"
-        if os.path.exists(session_file):
-            os.remove(session_file)
-            st.sidebar.success("Файл сессии удален. Попробуйте 'Получить код' заново.")
+    session_name = f"session_{phone}"
+
+    if st.sidebar.button("🗑️ Сбросить сессию (Force)"):
+        if os.path.exists(f"{session_name}.session"):
+            os.remove(f"{session_name}.session")
+            st.sidebar.success("Файл удален. Теперь нажми 'Получить код'.")
         else:
-            st.sidebar.info("Файлов сессий не найдено.")
+            st.sidebar.info("Файл уже удален.")
 
     # Основной интерфейс
     col1, col2 = st.columns(2)
     with col1:
-        st.subheader("📋 Чаты")
-        groups_input = st.text_area("Список ссылок", height=200)
+        st.subheader("📋 Список чатов")
+        groups_input = st.text_area("Ссылки (одна на строку)", height=200)
         group_list = [g.strip() for g in groups_input.split("\n") if g.strip()]
     with col2:
         st.subheader("📝 Реклама")
@@ -92,23 +92,22 @@ def main():
 
     from pyrogram import Client
 
-    # --- КНОПКА 1: ПОЛУЧЕНИЕ КОДА ---
+    # --- ШАГ 1: ПОЛУЧЕНИЕ КОДА ---
     if st.button("📩 1. ПОЛУЧИТЬ КОД", use_container_width=True):
         if not api_id or not api_hash or not phone:
-            st.error("Заполни API ID, Hash и Телефон!")
+            st.error("Заполни все поля API!")
         else:
             async def get_code():
-                # Удаляем старую битую сессию перед новым запросом
-                session_file = f"session_{phone}.session"
-                if os.path.exists(session_file):
-                    os.remove(session_file)
+                # Принудительно чистим старье перед запросом
+                if os.path.exists(f"{session_name}.session"):
+                    os.remove(f"{session_name}.session")
                 
-                app = Client(f"session_{phone}", api_id=int(api_id), api_hash=api_hash, phone_number=phone)
-                await app.connect()
+                app = Client(session_name, api_id=int(api_id), api_hash=api_hash, phone_number=phone)
                 try:
+                    await app.connect()
                     code_info = await app.send_code(phone)
-                    st.session_state['phone_code_hash'] = code_info.phone_code_hash
-                    st.success("Код отправлен! Введи его слева и нажми 'Запустить'.")
+                    st.session_state['code_hash'] = code_info.phone_code_hash
+                    st.success("Код отправлен! Впиши его слева.")
                 except Exception as e:
                     st.error(f"Ошибка: {e}")
                 finally:
@@ -116,43 +115,47 @@ def main():
             
             asyncio.run(get_code())
 
-    # --- КНОПКА 2: ЗАПУСК ---
+    # --- ШАГ 2: ЗАПУСК ---
     if st.button("🚀 2. ЗАПУСТИТЬ", use_container_width=True, type="primary"):
         if not auth_code:
-            st.error("Введи код подтверждения из Telegram!")
+            st.error("Сначала введи код!")
         else:
             async def start_app():
-                app = Client(f"session_{phone}", api_id=int(api_id), api_hash=api_hash, phone_number=phone)
-                await app.connect()
+                app = Client(session_name, api_id=int(api_id), api_hash=api_hash, phone_number=phone)
                 try:
-                    me = await app.get_me()
+                    await app.connect()
+                    # Проверка на "битую" сессию
+                    try:
+                        me = await app.get_me()
+                    except:
+                        me = None
+
                     if not me:
-                        # Пытаемся войти по коду
-                        code_hash = st.session_state.get('phone_code_hash')
-                        if not code_hash:
-                            st.error("Хэш кода не найден. Нажми '1. Получить код' еще раз.")
+                        h = st.session_state.get('code_hash')
+                        if not h:
+                            st.error("Хэш не найден. Нажми 'Получить код' еще раз.")
                             return
                         
                         try:
-                            await app.sign_in(phone, code_hash, auth_code)
+                            await app.sign_in(phone, h, auth_code)
                         except Exception as e:
-                            # Обработка 2FA пароля
                             if password_2fa:
                                 await app.check_password(password_2fa)
                             else:
                                 raise e
                     
-                    st.success("Авторизация прошла успешно!")
+                    st.success("Вход выполнен!")
                     await run_promotion_logic(app, group_list, msg_template, delays)
                     
                 except Exception as e:
-                    # Если ключ все еще битый — предлагаем удалить файл
+                    st.error(f"Ошибка: {e}")
+                    # Если сессия битая, удаляем её сразу
                     if "AUTH_KEY_UNREGISTERED" in str(e):
-                        st.error("Критическая ошибка сессии. Нажми кнопку 'Сбросить сессию' в левом меню и начни заново.")
-                    else:
-                        st.error(f"Ошибка: {e}")
+                        if os.path.exists(f"{session_name}.session"):
+                            os.remove(f"{session_name}.session")
                 finally:
-                    await app.disconnect()
+                    if app.is_connected:
+                        await app.disconnect()
 
             asyncio.run(start_app())
 
